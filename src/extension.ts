@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { findCompilers } from './compilerHandler';
+import { findCompilers, compileToAssembly } from './compilerHandler';
 
 // Переменная для кнопки в Status Bar
 let statusBarItem: vscode.StatusBarItem;
@@ -12,6 +12,20 @@ export function activate(context: vscode.ExtensionContext): void {
 
 	// Регистрируем команду компиляции
 	const compileCommand = vscode.commands.registerCommand('extension.compileToAsm', async () => {
+		// Проверяем, что открыт файл
+		const activeEditor = vscode.window.activeTextEditor;
+		if (!activeEditor) {
+			vscode.window.showErrorMessage('Нет активного файла для компиляции!');
+			return;
+		}
+
+		// Сохраняем файл перед компиляцией (если есть несохранённые изменения)
+		if (activeEditor.document.isDirty) {
+			await activeEditor.document.save();
+		}
+
+		const sourceFilePath = activeEditor.document.uri.fsPath;
+
 		// Ищем доступные компиляторы
 		const compilers = await findCompilers();
 
@@ -26,9 +40,38 @@ export function activate(context: vscode.ExtensionContext): void {
 			placeHolder: 'Выберите компилятор для сборки'
 		});
 
-		// Если пользователь выбрал компилятор
-		if (selected) {
-			vscode.window.showInformationMessage('Выбран: ' + selected);
+		// Если пользователь не выбрал компилятор или отменил
+		if (!selected) {
+			return;
+		}
+
+		// Компилируем с прогресс-баром
+		try {
+			const asmCode = await vscode.window.withProgress({
+				location: vscode.ProgressLocation.Notification,
+				title: 'Компиляция в Assembly...',
+				cancellable: false
+			}, async (progress) => {
+				progress.report({ message: 'Запуск компилятора...' });
+				return await compileToAssembly(selected, sourceFilePath);
+			});
+
+			// Создаём новый документ с ASM кодом
+			const doc = await vscode.workspace.openTextDocument({
+				content: asmCode,
+				language: 'asm'
+			});
+
+			// Показываем документ во второй колонке (split screen)
+			await vscode.window.showTextDocument(doc, {
+				viewColumn: vscode.ViewColumn.Beside,
+				preserveFocus: true
+			});
+
+			vscode.window.showInformationMessage('Компиляция успешно завершена!');
+		} catch (error) {
+			const errorMessage = error instanceof Error ? error.message : 'Неизвестная ошибка';
+			vscode.window.showErrorMessage(`Ошибка компиляции: ${errorMessage}`);
 		}
 	});
 
